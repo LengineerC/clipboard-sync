@@ -16,8 +16,8 @@ struct SyncState {
 }
 
 const EMPTY_HASH: u128 = 0;
-const CLIPBOARD_READ_TIMEOUT: Duration = Duration::from_secs(3);
-const CLIPBOARD_WRITE_TIMEOUT: Duration = Duration::from_secs(3);
+const CLIPBOARD_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const CLIPBOARD_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn log(level: &str, msg: &str) {
     let now = Utc::now().format("%H:%M:%S").to_string();
@@ -321,12 +321,16 @@ fn main() {
                 x_data
             };
 
-            if write_clipboard("wl-copy", &["-t", sync_mime], &write_data) {
+            // 在写入前就记录方向/时间/hash，避免写入触发的对向回环在状态更新前到达，
+            // 导致对向线程回读大图（xclip 的 INCR 并发缺陷会丢弃并发的粘贴请求）。
+            {
                 let mut state = state_x2w.lock().unwrap();
                 state.last_dir = "X2W".to_string();
                 state.last_time = get_ms();
                 state.last_sync_hash = current_hash;
             }
+
+            write_clipboard("wl-copy", &["-t", sync_mime], &write_data);
         }
     });
 
@@ -420,16 +424,20 @@ fn main() {
             other => other,
         };
 
-        if write_clipboard(
-            "xclip",
-            &["-sel", "clip", "-i", "-t", target_t],
-            &write_data,
-        ) {
+        // 在写入前就记录方向/时间/hash，避免写入触发的对向回环在状态更新前到达，
+        // 导致对向线程回读大图（xclip 的 INCR 并发缺陷会丢弃并发的粘贴请求）。
+        {
             let mut state = shared_state.lock().unwrap();
             state.last_dir = "W2X".to_string();
             state.last_time = get_ms();
             state.last_sync_hash = current_hash;
         }
+
+        write_clipboard(
+            "xclip",
+            &["-sel", "clip", "-i", "-t", target_t],
+            &write_data,
+        );
     }
 
     log("ERROR", "W2X 监听意外终止，触发退出...");
