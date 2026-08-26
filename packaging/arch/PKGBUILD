@@ -1,6 +1,6 @@
 _pkgname=clipboard-sync
 pkgname=clipboard-sync-git
-pkgver=r23.a1d662a
+pkgver=r37.7cd4ee8
 pkgrel=1
 pkgdesc="Low-latency bidirectional clipboard synchronization between X11 and Wayland"
 arch=('x86_64')

@@ -2,6 +2,8 @@
 
 在 X11 与 Wayland 的 `CLIPBOARD` 之间进行低延迟双向同步，解决 LinuxQQ 等 XWayland/Wayland 混合应用的剪贴板兼容问题。
 
+原仓库[linuxqq-clipsync](https://github.com/SHORiN-KiWATA/linuxqq-clipsync)能用，就是想自己改一点东西于是fork了（
+
 ## 功能
 
 - 使用 `clipnotify` 和 `wl-paste --watch` 监听变化，避免持续轮询。
@@ -24,11 +26,7 @@
 
 ## 安装
 
-发布到 AUR 或个人软件仓库后，可以安装 Git 包：
-
-```sh
-yay -S clipboard-sync-git
-```
+进入`package/arch`文件夹，执行`makepkg -si`
 
 也可以从源码构建：
 
