@@ -1,0 +1,13 @@
+[Unit]
+Description=Synchronize X11 and Wayland clipboards
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/clipboard-sync
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target

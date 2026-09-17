@@ -1,0 +1,8 @@
+/.cache/
+/build*/
+/packaging/arch/src/
+/packaging/arch/pkg/
+/packaging/arch/*.pkg.tar.*
+/tests/__pycache__/
+/compile_commands.json
+/.nvimlog
