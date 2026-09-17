@@ -25,7 +25,7 @@
 - `wl-clipboard`（`wl-copy`、`wl-paste`）
 - `clipnotify`
 
-构建需要 C++17 编译器、CMake 3.16 或更新版本和 POSIX 线程库。
+仅支持以 Linux 为构建目标，需要 C++17 编译器、CMake 3.16 或更新版本和 POSIX 线程库。
 xxHash 官方头文件已随源码附带，可离线构建。Python 3 仅用于模拟命令集成测试。
 
 ```sh
@@ -35,7 +35,7 @@ ctest --test-dir build --output-on-failure
 ./build/clipboard-sync
 ```
 
-实际运行和 Linux 内存缓冲使用 `memfd_create`。其他 POSIX 主机可以构建并使用匿名临时文件运行模拟测试。
+Linux 内存缓冲使用 `memfd_create`。CMake 会拒绝非 Linux 目标的配置。
 
 ## 编译和模拟测试
 
@@ -45,7 +45,7 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-需要 Python 3，但不需要安装 `xclip`、`wl-clipboard`、`clipnotify`，也不需要 X11 / Wayland 显示服务器。
+模拟测试在 Linux 上运行，需要 Python 3，但不需要安装 `xclip`、`wl-clipboard`、`clipnotify`，也不需要 X11 / Wayland 显示服务器。
 集成测试会在临时目录自动创建模拟命令，并启动编译好的同步程序。测试包含两个 10 秒超时场景，整套通常需要约 35 秒。
 
 只运行集成测试，或直接运行脚本：
@@ -61,7 +61,7 @@ python3 tests/integration_test.py ./build/clipboard-sync
 cmake -S . -B build -DBUILD_TESTING=ON -DPython3_EXECUTABLE="$(command -v python3)"
 ```
 
-直接运行 `./build/clipboard-sync` 会检查真实的 Linux 剪贴板依赖；macOS 上请通过上述测试命令运行模拟环境。
+直接运行 `./build/clipboard-sync` 会检查真实的 Linux 剪贴板依赖。
 
 ## 安装
 

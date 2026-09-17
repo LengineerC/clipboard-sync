@@ -1,5 +1,5 @@
 # Builds the C++ version from the local source tree containing this file.
-pkgname=clipboard-sync-cpp
+pkgname=clipboard-sync
 pkgver=0.1.0
 pkgrel=1
 pkgdesc='Low-latency bidirectional clipboard synchronization between X11 and Wayland (C++17)'
