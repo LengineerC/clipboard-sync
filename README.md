@@ -35,7 +35,7 @@ ctest --test-dir build --output-on-failure
 ./build/clipboard-sync
 ```
 
-实际运行和 Linux 内存缓冲使用 `memfd_create`。其他 POSIX 主机可以构建并使用匿名临时文件运行模拟测试；这不提供 macOS 原生剪贴板同步。
+实际运行和 Linux 内存缓冲使用 `memfd_create`。其他 POSIX 主机可以构建并使用匿名临时文件运行模拟测试。
 
 ## 编译和模拟测试
 
