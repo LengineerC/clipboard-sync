@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -25,9 +26,13 @@ struct Fingerprint {
     }
     bool operator!=(const Fingerprint& other) const { return !(*this == other); }
 };
+class X11Provider;
 struct SyncState {
+    SyncState();
+    ~SyncState();
     std::optional<Fingerprint> x11;
     std::optional<Fingerprint> wayland;
+    std::unique_ptr<X11Provider> x11_provider;
     std::mutex mutex;
 };
 

@@ -2,14 +2,17 @@
 
 #include <fcntl.h>
 #include <spawn.h>
+#include <poll.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include <cerrno>
+#include <algorithm>
 #include <csignal>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <iostream>
 #include <thread>
 #ifdef __linux__
@@ -40,7 +43,108 @@ int memory_file(const char* name) {
 #endif
 }
 bool success(const std::optional<int>& status) { return status && WIFEXITED(*status) && WEXITSTATUS(*status) == 0; }
+
+bool fill_file(int fd, const Bytes& data) {
+    for (std::size_t offset = 0; offset < data.size();) {
+        const auto count = write(fd, data.data() + offset, data.size() - offset);
+        if (count > 0) offset += static_cast<std::size_t>(count);
+        else if (count < 0 && errno == EINTR) continue;
+        else return false;
+    }
+    return lseek(fd, 0, SEEK_SET) >= 0;
+}
+
+bool wait_ready(int fd, std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    std::string reply;
+    while (std::chrono::steady_clock::now() < deadline) {
+        pollfd descriptor{fd, POLLIN, 0};
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now()).count();
+        const auto ready = poll(&descriptor, 1, static_cast<int>(std::max<std::int64_t>(1, remaining)));
+        if (ready < 0 && errno == EINTR) continue;
+        if (ready <= 0) return false;
+        char buffer[16];
+        const auto count = read(fd, buffer, sizeof(buffer));
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) return false;
+        reply.append(buffer, count);
+        if (reply == "READY\n") return true;
+        if (reply.size() >= 6 || reply.find('\n') != std::string::npos) return false;
+    }
+    return false;
+}
+
+bool reaped(pid_t child) {
+    int status;
+    pid_t result;
+    do { result = waitpid(child, &status, WNOHANG); } while (result < 0 && errno == EINTR);
+    return result == child || (result < 0 && errno == ECHILD);
+}
 }  // namespace
+
+std::string X11Provider::executable() {
+    std::error_code error;
+    const auto self = std::filesystem::read_symlink("/proc/self/exe", error);
+    return error ? std::string{} : (self.parent_path() / "clipboard-sync-x11").string();
+}
+
+X11Provider::~X11Provider() {
+    if (current_ > 0) kill_and_wait(current_);
+    for (const auto child : retired_) kill_and_wait(child);
+}
+
+bool X11Provider::reap() {
+    bool lost = false;
+    if (current_ > 0 && reaped(current_)) {
+        current_ = -1;
+        lost = true;
+    }
+    for (auto it = retired_.begin(); it != retired_.end();) {
+        if (reaped(*it)) it = retired_.erase(it);
+        else ++it;
+    }
+    return lost;
+}
+
+bool X11Provider::start(const std::string& mime, const Bytes& data) {
+    FileDescriptor file(memory_file("clip_x11"));
+    if (file.get() < 0 || !fill_file(file.get(), data)) return false;
+    int descriptors[2];
+    if (!make_pipe(descriptors)) return false;
+    FileDescriptor input(descriptors[0]);
+    std::optional<pid_t> child;
+    {
+        FileDescriptor output(descriptors[1]);
+        child = spawn_command(executable(), {mime, std::to_string(getpid())}, file.get(), output.get());
+    }
+    if (!child) return false;
+    if (!wait_ready(input.get(), clipboard_write_timeout)) {
+        kill_and_wait(*child);
+        log("WARN", "X11 提供进程未确认就绪（启动失败或超时）");
+        return false;
+    }
+    // The ready message is not an exit status. Check for immediate failure,
+    // and retain the live process for later cleanup / lost-owner detection.
+    if (reaped(*child)) return false;
+    (void)reap();
+    if (current_ > 0) retired_.push_back(current_);
+    current_ = *child;
+    // Old providers finish accepted INCR requests after losing ownership.
+    // Bound resource usage even if clients keep many old transfers alive.
+    while (retired_.size() > 16) {
+        kill_and_wait(retired_.front());
+        retired_.erase(retired_.begin());
+    }
+    return true;
+}
+
+bool X11Provider::publish(const std::string& mime, const Bytes& data) {
+    if (start(mime, data)) return true;
+    std::this_thread::sleep_for(write_retry_delay);
+    log("INFO", "重试剪贴板写入");
+    return start(mime, data);
+}
 
 FileDescriptor::~FileDescriptor() {
     if (fd_ >= 0) close(fd_);
@@ -162,18 +266,7 @@ bool write_clipboard(const std::string& command, const Arguments& args, const By
         log("ERROR", "创建剪贴板写入缓冲区失败");
         return false;
     }
-    for (std::size_t offset = 0; offset < data.size();) {
-        const auto count = write(file.get(), data.data() + offset, data.size() - offset);
-        if (count > 0)
-            offset += static_cast<std::size_t>(count);
-        else if (count < 0 && errno == EINTR)
-            continue;
-        else {
-            log("ERROR", "准备剪贴板写入数据失败");
-            return false;
-        }
-    }
-    if (lseek(file.get(), 0, SEEK_SET) < 0) {
+    if (!fill_file(file.get(), data)) {
         log("ERROR", "准备剪贴板写入数据失败");
         return false;
     }

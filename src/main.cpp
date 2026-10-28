@@ -138,6 +138,9 @@ int main() {
     Arguments missing;
     for (const auto* name : {"xclip", "wl-copy", "wl-paste", "clipnotify"})
         if (!command_exists(name)) missing.emplace_back(name);
+    const auto x11_provider = X11Provider::executable();
+    if (x11_provider.empty() || access(x11_provider.c_str(), X_OK) != 0)
+        missing.emplace_back("clipboard-sync-x11（须与主程序放在同一目录）");
     if (!missing.empty()) {
         log("FATAL", "缺少依赖命令: " + join(missing, ", "));
         return 1;

@@ -14,6 +14,21 @@ inline constexpr auto watch_restart_delay = std::chrono::seconds(1);
 inline constexpr auto write_retry_delay = std::chrono::milliseconds(100);
 using Arguments = std::vector<std::string>;
 
+// The X11 provider acknowledges ownership, then stays in the foreground. Keep
+// its actual PID rather than the short-lived launcher of a daemonizing xclip.
+class X11Provider {
+   public:
+    ~X11Provider();
+    bool publish(const std::string& mime, const Bytes& data);
+    bool reap();
+    static std::string executable();
+
+   private:
+    bool start(const std::string& mime, const Bytes& data);
+    pid_t current_ = -1;
+    std::vector<pid_t> retired_;
+};
+
 class FileDescriptor {
    public:
     explicit FileDescriptor(int fd = -1) : fd_(fd) {}

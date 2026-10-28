@@ -175,15 +175,20 @@ std::optional<Fingerprint> fingerprint(const std::string& kind, const Bytes& dat
     return Fingerprint{kind, hash.low64, hash.high64};
 }
 
+SyncState::SyncState() : x11_provider(std::make_unique<X11Provider>()) {}
+SyncState::~SyncState() = default;
+
 void sync_clipboard(SyncState& state, Direction direction) {
     std::lock_guard<std::mutex> guard(state.mutex);
+    if (state.x11_provider->reap()) state.x11.reset();
     const bool from_x = direction == Direction::XToWayland;
     auto& source = from_x ? state.x11 : state.wayland;
     auto& target = from_x ? state.wayland : state.x11;
     const auto types = from_x ? read_clipboard("xclip", {"-selection", "clipboard", "-t", "TARGETS", "-o"})
                               : read_clipboard("wl-paste", {"--list-types"});
     if (!types) {
-        source.reset();
+        // Failure means unknown, not empty: clearing this fingerprint can turn
+        // a failed echo read into another publication of the same large image.
         return;
     }
     const auto choice = choose_mime(parse_types(*types), direction);
@@ -194,7 +199,6 @@ void sync_clipboard(SyncState& state, Direction direction) {
     const auto data = from_x ? read_clipboard("xclip", {"-selection", "clipboard", "-o", "-t", choice->read_mime})
                              : read_clipboard("wl-paste", {"-n", "-t", choice->read_mime});
     if (!data) {
-        source.reset();
         return;
     }
     const auto prepared = prepare_data(*data, choice->mode);
@@ -210,8 +214,7 @@ void sync_clipboard(SyncState& state, Direction direction) {
             << std::setfill('0') << (current->high >> 32) << ')';
     log(from_x ? "X2W" : "W2X", message.str());
     const bool written = from_x ? write_clipboard_with_retry("wl-copy", {"-t", choice->write_mime}, prepared)
-                                : write_clipboard_with_retry(
-                                      "xclip", {"-selection", "clipboard", "-i", "-t", choice->write_mime}, prepared);
+                                : state.x11_provider->publish(choice->write_mime, prepared);
     if (written)
         target = current;
     else

@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -43,19 +44,30 @@ if tool == 'wl-paste' and args == ['--watch', 'echo']:
             else:
                 print('', flush=True)
     sys.exit(0)
-side = 'x' if tool == 'xclip' else 'w'
-writing = tool == 'wl-copy' or '-i' in args
+side = 'x' if tool in ('xclip', 'clipboard-sync-x11') else 'w'
+writing = tool in ('wl-copy', 'clipboard-sync-x11') or '-i' in args
 record({'tool': tool, 'args': args})
 if writing:
     data = sys.stdin.buffer.read()
-    mime = args[args.index('-t') + 1]
+    mime = args[0] if tool == 'clipboard-sync-x11' else args[args.index('-t') + 1]
     failed = consume('fail_writes')
-    record({'write': side, 'mime': mime, 'data': base64.b64encode(data).decode(), 'failed': failed})
+    record({'write': side, 'mime': mime, 'data': base64.b64encode(data).decode(), 'failed': failed, 'pid': os.getpid()})
     if consume('timeout_writes'): time.sleep(30)
     if failed: sys.exit(1)
+    if tool == 'clipboard-sync-x11' and consume('invalid_ready'):
+        print('BAD', flush=True)
+        time.sleep(30)
     value = {mime: base64.b64encode(data).decode()}
     tmp = root / (side + '.tmp')
     tmp.write_text(json.dumps(value)); tmp.replace(root / (side + '.json'))
+    if tool == 'clipboard-sync-x11':
+        (root / 'x.owner').write_text(str(os.getpid()))
+        # A foreground owner acknowledges publication without exiting.
+        print('READY', flush=True)
+        while True:
+            if (root / 'x.owner').read_text() != str(os.getpid()): sys.exit(0)
+            if json.loads((root / 'x.json').read_text()) != value: sys.exit(0)
+            time.sleep(0.02)
 else:
     if consume('timeout_reads'): time.sleep(30)
     if consume('fail_reads'): sys.exit(1)
@@ -97,7 +109,7 @@ class Session:
         (root / 'wayland-test').touch()
         bindir = root / 'bin'
         bindir.mkdir()
-        for name in ('xclip', 'wl-copy', 'wl-paste', 'clipnotify'):
+        for name in ('xclip', 'wl-copy', 'wl-paste', 'clipnotify', 'clipboard-sync-x11'):
             executable = bindir / name
             executable.write_text('#!' + sys.executable + '\n' + MOCK)
             executable.chmod(0o755)
@@ -106,7 +118,12 @@ class Session:
         for name in ('WAYLAND_DISPLAY', 'XAUTHORITY'):
             self.env.pop(name, None)
         self.logfile = (root / 'daemon.log').open('w+')
-        self.process = subprocess.Popen([binary], env=self.env, stdout=self.logfile,
+        # The native owner is resolved beside the executable, in installed and
+        # build trees alike. Place the daemon beside the mock provider.
+        daemon = bindir / 'clipboard-sync'
+        shutil.copy2(binary, daemon)
+        self.binary = str(daemon)
+        self.process = subprocess.Popen([self.binary], env=self.env, stdout=self.logfile,
                                         stderr=subprocess.STDOUT, start_new_session=True)
         self.watch_ready('x')
         self.watch_ready('w')
@@ -204,6 +221,31 @@ def run(binary):
                     session.transfer(side, {mime: binary_data, 'text/plain': b'ignored'}, mime, binary_data)
             session.transfer('x', {'application/x-qt-image': b'qt', 'IMAGE/PNG': b'png'}, 'image/png', b'png')
             session.transfer('w', {'Image/HEIC': b'heic'}, 'image/heic', b'heic')
+
+            # Reproduce the observed size, and then a failed read of our X11
+            # echo. A transient failure must not republish the same large PNG.
+            png = (bytes(range(256)) * 12555)[:3213813]
+            session.transfer('w', {'image/png': png}, 'image/png', png)
+            (root / 'fail_reads').write_text('1')
+            session.ignored('x', {'image/png': png})
+            session.ignored('w', {'image/png': png})
+            owner_pid = session.writes()[-1]['pid']
+            check(Path('/proc', str(owner_pid)).exists(), 'foreground provider was killed after READY')
+
+            # A crashed owner invalidates the cached target, allowing the same
+            # source content to be published again on the next event.
+            os.kill(owner_pid, signal.SIGKILL)
+            session.transfer('w', {'image/png': png}, 'image/png', png)
+            until(lambda: not Path('/proc', str(owner_pid)).exists(), 'crashed provider was not reaped')
+            check(session.writes()[-1]['pid'] != owner_pid, 'crashed provider was not replaced')
+
+            # A process that runs but never acknowledges ownership is not a
+            # successful write. It must be killed/reaped before retrying.
+            (root / 'invalid_ready').write_text('1')
+            before = len(session.writes())
+            session.transfer('w', {'text/plain': b'ready retry'}, 'UTF8_STRING', b'ready retry', attempts=2)
+            failed_pid = session.writes()[before]['pid']
+            until(lambda: not Path('/proc', str(failed_pid)).exists(), 'bad-ready provider leaked')
             files = b'copy\n/tmp/a b\nfile:///tmp/c\r\n'
             normalized = b'file:///tmp/a b\nfile:///tmp/c\n'
             session.transfer('x', {'image/png': b'ignored', 'x-special/gnome-copied-files': files},
@@ -237,7 +279,7 @@ def run(binary):
             start = time.monotonic()
             session.transfer('w', {'text/plain': b'write timeout'}, 'UTF8_STRING', b'write timeout', attempts=2, timeout=14)
             check(9.8 <= time.monotonic() - start < 14, 'incorrect write timeout')
-            check('写入剪贴板超时' in session.log(), 'write timeout log missing')
+            check('X11 提供进程未确认就绪' in session.log(), 'write timeout log missing')
 
             for event in ('exit', 'invalid'):
                 count = sum(item.get('watch') == 'w' for item in session.calls())
